@@ -1,0 +1,122 @@
+import socket
+import threading
+import json
+import datetime
+import os
+
+HOST = '0.0.0.0'
+PORT = 12345
+
+clients = {}
+
+USER_FILE = "users.json"
+CHAT_LOG_FILE = "chat_history.txt"
+
+# هاذي ميزتها يعيال عشان يحفظ الحسابات بعد اعادة التشغيل باستخدام json
+if os.path.exists(USER_FILE):
+    with open(USER_FILE, "r") as file:
+        users = json.load(file)
+else:
+    users = {}
+  
+# هاذي عشان اول مايشتغل يبدا يحفظ المحادثات ايضا تسترجع الرسايل السابقة بعد اعادة التشغيل
+if os.path.exists(CHAT_LOG_FILE):
+    with open(CHAT_LOG_FILE, "r") as file:
+        chat_log = file.readlines()
+else:
+    chat_log = []
+
+# هاذي عشان تخزن حساب اليوزر بشكل دايم
+def save_users():
+    with open(USER_FILE, "w") as file:
+        json.dump(users, file)
+
+def broadcast_message(message, sender):
+    for client in clients.values():
+        if client != sender:
+            client.send(json.dumps({"type": "broadcast", "message": message}).encode())
+
+def multicast_message(message, sender, recipients):
+    for username in recipients:
+        if username in clients and clients[username] != sender:
+            clients[username].send(json.dumps({"type": "multicast", "message": message}).encode())
+
+def unicast_message(message, sender, recipient):
+    if recipient in clients:
+        clients[recipient].send(json.dumps({"type": "unicast", "message": message}).encode())
+
+def handle_client(client_socket, username):
+    while True:
+        try:
+            data = client_socket.recv(1024).decode()
+            if not data:
+                break
+            
+            message_data = json.loads(data)
+            message_type = message_data["type"]
+            message = message_data["message"]
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            log_entry = f"[{timestamp}] {username}: {message}\n"
+            chat_log.append(log_entry)
+          
+            # هاذي رح تحفظ المحاثات بشكل مباشر الى الملف
+            with open(CHAT_LOG_FILE, "a") as file:
+                file.write(log_entry)
+            
+            if message_type == "broadcast":
+                broadcast_message(f"{username}: {message}", client_socket)
+            elif message_type == "multicast":
+                multicast_message(f"{username}: {message}", client_socket, message_data["recipients"])
+            elif message_type == "unicast":
+                unicast_message(f"{username}: {message}", client_socket, message_data["recipient"])
+        
+        except:
+            break
+    
+    client_socket.close()
+    del clients[username]
+    print(f"{username} disconnected")
+
+def start_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen(5)
+    print(f"Server started on {HOST}:{PORT}")
+    
+    while True:
+        client_socket, addr = server.accept()
+        print(f"Connection from {addr}")
+
+        client_socket.send("Enter your username: ".encode())
+        username = client_socket.recv(1024).decode().strip()
+
+        client_socket.send("Enter your password: ".encode())
+        password = client_socket.recv(1024).decode().strip()
+ 
+        #  هاذي حطيتها قدعنه من عندي يتحقق من صحة كلمة المرور واذا ماكان عندة ينشى حساب وماينفع تكون كلمة السر متكررة مع حساب ثاني
+        if username in users:
+            if users[username] != password:
+                client_socket.send("Incorrect password. Connection closed.".encode())
+                client_socket.close()
+                continue
+        else:
+            users[username] = password
+            save_users()
+            client_socket.send("New account created successfully!".encode())
+          
+        # هنا بيشوف هل موجود حسابه قبل اذا لا بيخزنه اذا ايه بيقولة انه موجود
+        if username in clients:
+            client_socket.send("Username already logged in. Try again.".encode())
+            client_socket.close()
+            continue
+        
+        clients[username] = client_socket
+        client_socket.send("Welcome to the chat server!".encode())
+        print(f"{username} joined the chat")
+
+        thread = threading.Thread(target=handle_client, args=(client_socket, username))
+        thread.start()
+
+if __name__ == "__main__":
+    start_server()
