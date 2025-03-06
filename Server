@@ -10,41 +10,72 @@ PORT = 12345
 clients = {}
 
 USER_FILE = "users.json"
-CHAT_LOG_FILE = "chat_history.txt"
+CHAT_LOG_DIR = "chat_logs"
 
-# هاذي ميزتها يعيال عشان يحفظ الحسابات بعد اعادة التشغيل باستخدام json
+# إنشاء مجلد لحفظ سجلات المحادثات إذا لم يكن موجودًا
+if not os.path.exists(CHAT_LOG_DIR):
+    os.makedirs(CHAT_LOG_DIR)
+
+# تحميل الحسابات عند بدء التشغيل حتى لا تفقد بعد إعادة التشغيل
 if os.path.exists(USER_FILE):
     with open(USER_FILE, "r") as file:
         users = json.load(file)
 else:
     users = {}
-  
-# هاذي عشان اول مايشتغل يبدا يحفظ المحادثات ايضا تسترجع الرسايل السابقة بعد اعادة التشغيل
-if os.path.exists(CHAT_LOG_FILE):
-    with open(CHAT_LOG_FILE, "r") as file:
-        chat_log = file.readlines()
-else:
-    chat_log = []
 
-#  هاذي عشان تخزن حساب اليوزر بشكل دايم وتحفظه بعد ماننشئة
+# دالة لحفظ المستخدمين في ملف JSON بعد إنشائهم
 def save_users():
     with open(USER_FILE, "w") as file:
         json.dump(users, file)
 
-def broadcast_message(message, sender):
+# تحديد ملف السجل المناسب بناء على نوع الرسالة
+# - broadcast: ملف واحد مشترك للجميع
+# - multicast: ملف خاص لكل مجموعة
+# - unicast: ملف منفصل لكل محادثة خاصة بين مستخدمين
+
+def get_chat_log(message_type, sender, recipients=None):
+    if message_type == "broadcast":
+        return os.path.join(CHAT_LOG_DIR, "broadcast_log.txt")
+    elif message_type == "multicast" and recipients:
+        group_name = "_".join(sorted(recipients))
+        return os.path.join(CHAT_LOG_DIR, f"group_{group_name}.txt")
+    elif message_type == "unicast" and recipients:
+        user_pair = "_".join(sorted([sender, recipients]))
+        return os.path.join(CHAT_LOG_DIR, f"private_{user_pair}.txt")
+    return None
+
+# حفظ كل رسالة في الملف المناسب بناءً على نوع المحادثة
+# حتى يتمكن المستخدمون من استرجاع المحادثات بعد إعادة التشغيل
+
+def save_chat(message_type, sender, message, recipients=None):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {sender}: {message}\n"
+    log_filename = get_chat_log(message_type, sender, recipients)
+    if log_filename:
+        with open(log_filename, "a") as file:
+            file.write(log_entry)
+
+# إرسال رسالة لجميع المستخدمين (Broadcast)
+def send_to_all(message, sender):
+    save_chat("broadcast", sender, message)
     for client in clients.values():
         if client != sender:
             client.send(json.dumps({"type": "broadcast", "message": message}).encode())
 
-def multicast_message(message, sender, recipients):
-    for username in recipients:
-        if username in clients and clients[username] != sender:
-            clients[username].send(json.dumps({"type": "multicast", "message": message}).encode())
+# إرسال رسالة لمجموعة معينة (Multicast)
+def send_to_group(message, sender, recipients):
+    save_chat("multicast", sender, message, recipients)
+    for user in recipients:
+        if user in clients and clients[user] != sender:
+            clients[user].send(json.dumps({"type": "multicast", "message": message}).encode())
 
-def unicast_message(message, sender, recipient):
+# إرسال رسالة لمستخدم معين (Unicast)
+def send_to_user(message, sender, recipient):
+    save_chat("unicast", sender, message, recipient)
     if recipient in clients:
         clients[recipient].send(json.dumps({"type": "unicast", "message": message}).encode())
 
+# التعامل مع كل مستخدم متصل بالخادم
 def handle_client(client_socket, username):
     while True:
         try:
@@ -55,21 +86,13 @@ def handle_client(client_socket, username):
             message_data = json.loads(data)
             message_type = message_data["type"]
             message = message_data["message"]
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            log_entry = f"[{timestamp}] {username}: {message}\n"
-            chat_log.append(log_entry)
-          
-            # هاذي رح تحفظ المحاثات بشكل مباشر الى الملف
-            with open(CHAT_LOG_FILE, "a") as file:
-                file.write(log_entry)
             
             if message_type == "broadcast":
-                broadcast_message(f"{username}: {message}", client_socket)
+                send_to_all(f"{username}: {message}", client_socket)
             elif message_type == "multicast":
-                multicast_message(f"{username}: {message}", client_socket, message_data["recipients"])
+                send_to_group(f"{username}: {message}", client_socket, message_data["recipients"])
             elif message_type == "unicast":
-                unicast_message(f"{username}: {message}", client_socket, message_data["recipient"])
+                send_to_user(f"{username}: {message}", client_socket, message_data["recipient"])
         
         except:
             break
@@ -78,6 +101,7 @@ def handle_client(client_socket, username):
     del clients[username]
     print(f"{username} disconnected")
 
+# تشغيل الخادم واستقبال المستخدمين الجدد والتعامل مع تسجيل الدخول
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
@@ -94,7 +118,7 @@ def start_server():
         client_socket.send("Enter your password: ".encode())
         password = client_socket.recv(1024).decode().strip()
  
-        #  هاذي حطيتها قدعنه من عندي يتحقق من صحة كلمة المرور واذا ماكان عندة ينشى حساب وماينفع تكون كلمة السر متكررة مع حساب ثاني
+        # التحقق من الحساب إذا كان موجودًا، وإذا لم يكن كذلك يتم إنشاؤه تلقائيًا
         if username in users:
             if users[username] != password:
                 client_socket.send("Incorrect password. Connection closed.".encode())
@@ -104,8 +128,8 @@ def start_server():
             users[username] = password
             save_users()
             client_socket.send("New account created successfully!".encode())
-          
-        # هنا بيشوف هل موجود حسابه قبل اذا لا بيخزنه اذا ايه بيقولة انه موجود
+        
+        # منع تسجيل الدخول بنفس الحساب أكثر من مرة
         if username in clients:
             client_socket.send("Username already logged in. Try again.".encode())
             client_socket.close()
