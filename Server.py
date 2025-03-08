@@ -1,0 +1,152 @@
+import socket
+import threading
+import json
+import datetime
+import os
+
+HOST = '127.0.0.1'
+PORT = 12345
+
+clients = {}
+
+USER_FILE = "users.json"
+CHAT_LOG_DIR = "chat_logs"
+
+# إنشاء مجلد لحفظ سجلات المحادثات إذا لم يكن موجودًا
+if not os.path.exists(CHAT_LOG_DIR):
+    os.makedirs(CHAT_LOG_DIR)
+
+# تحميل الحسابات عند بدء التشغيل حتى لا تفقد بعد إعادة التشغيل
+if os.path.exists(USER_FILE):
+    with open(USER_FILE, "r") as file:
+        users = json.load(file)
+else:
+    users = {}
+
+# دالة لحفظ المستخدمين في ملف JSON بعد إنشائهم
+def save_users():
+    with open(USER_FILE, "w") as file:
+        json.dump(users, file)
+
+# تحديد ملف السجل المناسب بناءً على نوع المحادثة
+# - broadcast: ملف مشترك لجميع الرسائل العامة
+# - multicast: ملف خاص لكل مجموعة
+# - unicast: ملف منفصل لكل محادثة خاصة بين مستخدمين
+
+def get_chat_log_filename(message_type, sender, recipients=None):
+    if message_type == "broadcast":
+        return os.path.join(CHAT_LOG_DIR, "broadcast_chat.txt")
+    elif message_type == "multicast" and recipients:
+        group_name = "_".join(sorted(recipients))
+        return os.path.join(CHAT_LOG_DIR, f"group_chat_{group_name}.txt")
+    elif message_type == "unicast" and recipients:
+        #user_pair = "_".join(sorted([sender, recipients])) فيها بلاء
+        user_pair = "_".join(sorted(recipients))
+        return os.path.join(CHAT_LOG_DIR, f"private_chat_{user_pair}.txt")
+    return None
+
+# حفظ كل رسالة في الملف المناسب بناءً على نوع المحادثة
+def log_message(message_type, sender, message, recipients=None):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {sender}: {message}\n"
+    log_filename = get_chat_log_filename(message_type, sender, recipients)
+    if log_filename:
+        with open(log_filename, "a", encoding="utf-8") as file:
+            file.write(log_entry)
+
+# إرسال رسالة لجميع المستخدمين (Broadcast)
+def send_broadcast(message, sender):
+    log_message("broadcast", sender, message)
+    for client in clients.values():
+        if client != sender:
+            client.send(json.dumps({"type": "broadcast", "message": message}).encode())
+
+# إرسال رسالة لمجموعة معينة (Multicast) 
+def send_multicast(message, sender, recipients):
+    log_message("multicast", sender, message, recipients)
+    for user in recipients:
+        if user in clients and clients[user] != sender:
+            clients[user].send(json.dumps({"type": "multicast", "message": message}).encode())
+
+# إرسال رسالة لمستخدم معين (Unicast)
+def send_unicast(message, sender, recipient):
+    log_message("unicast", sender, message, recipient)
+    if recipient in clients:
+        clients[recipient].send(json.dumps({"type": "unicast", "message": message}).encode())
+
+# التعامل مع كل مستخدم متصل بالخادم
+def handle_client(client_socket, username):
+    try:
+        while True:
+            #print("Entered handle_client method before date") # Testing!
+            data = client_socket.recv(1024).decode()
+            #print("Entered handle_client method before break: ", type(data)) # Testing!
+            if not data:
+                break
+            
+            #print("Entered handle_client method after break") # Testing!
+            
+            message_data = json.loads(data)
+            message_type = message_data["type"]
+            message = message_data["message"]
+            
+            if message_type == "broadcast":
+                #print(f"{username}: {message}") # Testing!
+                send_broadcast(f"{username}: {message}", client_socket)
+            elif message_type == "multicast":
+                send_multicast(f"{username}: {message}", client_socket, message_data["recipients"])
+            elif message_type == "unicast":
+                #print(f"{username}: {message}","QQQQQ", message_data["recipient"]) # Testing!
+                send_unicast(f"{username}: {message}", client_socket, message_data["recipient"])
+    
+    except Exception as e:
+        print(f" Error with {username}: {e}")
+    
+    finally:
+        client_socket.close()
+        del clients[username]
+        print(f" {username} disconnected")
+
+# تشغيل الخادم واستقبال المستخدمين الجدد والتعامل مع تسجيل الدخول
+def start_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen(5)
+    print(f"Server started on {HOST}:{PORT}")
+    
+    while True:
+        client_socket, addr = server.accept()
+        print(f"Connection from {addr}")
+        
+        while True:
+            client_socket.send("Enter your username: ".encode())
+            username = client_socket.recv(1024).decode().strip()
+            
+            client_socket.send("Enter your password: ".encode())
+            password = client_socket.recv(1024).decode().strip()
+    
+            if username in users:
+                if users[username] != password:
+                    client_socket.send(" Incorrect password. Try again.".encode())
+                    #client_socket.close()
+                elif username in clients:
+                    client_socket.send("Username already logged in. Try again.".encode())
+                    #client_socket.close()
+                else:
+                    client_socket.send(" Login successful!".encode())
+                    break
+            else:
+                users[username] = password
+                save_users()
+                client_socket.send(" New account created successfully!".encode())
+                break
+        
+        clients[username] = client_socket
+        client_socket.send("Welcome to the chat server!".encode())
+        print(f"{username} joined the chat")
+
+        thread = threading.Thread(target=handle_client, args=(client_socket, username))
+        thread.start()
+
+if __name__ == "__main__":
+    start_server()
