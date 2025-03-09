@@ -61,7 +61,7 @@ def send_broadcast(message, sender):
         if client != sender:
             client.send(json.dumps({"type": "broadcast", "message": message}).encode())
 
-# إرسال رسالة لمجموعة معينة (Multicast) 
+# إرسال رسالة لمجموعة معينة (Multicast)
 def send_multicast(message, sender, recipients):
     log_message("multicast", sender, message, recipients)
     for user in recipients:
@@ -88,6 +88,11 @@ def handle_client(client_socket, username):
             
             message_data = json.loads(data)
             message_type = message_data["type"]
+            
+            if message_type == "disconnect":
+                print(f"{username} has disconnected.")
+                break
+            
             message = message_data["message"]
             
             if message_type == "broadcast":
