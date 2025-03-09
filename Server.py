@@ -93,16 +93,38 @@ def handle_client(client_socket, username):
                 print(f"{username} has disconnected.")
                 break
             
-            message = message_data["message"]
-            
-            if message_type == "broadcast":
-                #print(f"{username}: {message}") # Testing!
-                send_broadcast(f"{username}: {message}", client_socket)
-            elif message_type == "multicast":
-                send_multicast(f"{username}: {message}", client_socket, message_data["recipients"])
-            elif message_type == "unicast":
-                #print(f"{username}: {message}","QQQQQ", message_data["recipient"]) # Testing!
-                send_unicast(f"{username}: {message}", client_socket, message_data["recipient"])
+            elif message_type == "file":
+                # Receive file name
+                file_name = message_data["file_name"]
+                print(f"Receiving file: {file_name}")
+
+                # Receive file size
+                file_size_data = client_socket.recv(1024).decode()
+                file_size = json.loads(file_size_data)["size"]
+                print(f"File size: {file_size} bytes")
+
+                # Receive file data in chunks
+                received_size = 0
+                with open(file_name, "wb") as file:
+                    while received_size < file_size:
+                        data = client_socket.recv(1024)
+                        if not data:
+                            break
+                        file.write(data)
+                        received_size += len(data)
+                print(f"File {file_name} received successfully.")
+                
+            else:
+                message = message_data["message"]
+                
+                if message_type == "broadcast":
+                    #print(f"{username}: {message}") # Testing!
+                    send_broadcast(f"{username}: {message}", client_socket)
+                elif message_type == "multicast":
+                    send_multicast(f"{username}: {message}", client_socket, message_data["recipients"])
+                elif message_type == "unicast":
+                    #print(f"{username}: {message}","QQQQQ", message_data["recipient"]) # Testing!
+                    send_unicast(f"{username}: {message}", client_socket, message_data["recipient"])
     
     except Exception as e:
         print(f" Error with {username}: {e}")

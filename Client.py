@@ -2,6 +2,7 @@ import socket
 import json
 import threading
 import time
+import os
 
 HOST = '127.0.0.1'
 PORT = 12345
@@ -47,6 +48,28 @@ def message_receving(client_socket):
     finally:
         connected = False
         
+def send_file(client_socket, file_path):
+    try:
+        # Send the file type and name
+        file_name = os.path.basename(file_path)
+        client_socket.send(json.dumps({"type": "file", "file_name": file_name}).encode())
+
+        # Send the file size
+        file_size = os.path.getsize(file_path)
+        client_socket.send(json.dumps({"type": "file_size", "size": file_size}).encode())
+
+        # Send the file data in chunks
+        with open(file_path, "rb") as file:
+            while True:
+                data = file.read(1024)
+                if not data:
+                    break
+                client_socket.send(data)
+        
+        print(f"File {file_name} sent successfully.")
+    except Exception as e:
+        print(f"Error sending file: {e}")
+        
 def message_sending(client_socket):
     global connected
     try:
@@ -63,8 +86,14 @@ def message_sending(client_socket):
                 time.sleep(1)
                 connected = False
                 break
-            try:    
-                if message_input.startswith('['):
+            try:
+                if message_input.startswith('file:'):  # Handle file transfer
+                    file_path = message_input.split('file:')[1].strip()
+                    if os.path.exists(file_path):
+                        send_file(client_socket, file_path)
+                    else:
+                        print(f"File {file_path} does not exist.")    
+                elif message_input.startswith('['):
                     temp = message_input.split(']')
                     
                     userStr = temp[0]
