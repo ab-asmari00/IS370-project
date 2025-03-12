@@ -9,6 +9,11 @@ PORT = 12345
 
 connected = True
 
+SECRET_KEY = "mysecretkey"
+
+def xor_encrypt_decrypt(data, key=SECRET_KEY):
+    return "".join(chr(ord(c) ^ ord(key[i % len(key)])) for i, c in enumerate(data))
+
 def unicast(message, user):
     return json.dumps({"type": "unicast", "message": message, "recipient":user}).encode()
 
