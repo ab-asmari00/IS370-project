@@ -9,17 +9,10 @@ PORT = 12345
 
 connected = True
 
-demomassage = {"type": "uncast", "massge": "massge", "recipient":"recipient", "recipients":("u1","u2")}
-demorecive = {"type": "uncast", "massge": "massge"}
-
 def unicast(message, user):
-    #demoContent = json.dumps({"type": "unicast", "message": message, "recipient":user})#Test
-    #print (demoContent) #test
     return json.dumps({"type": "unicast", "message": message, "recipient":user}).encode()
 
 def multicast(message, user):
-    # demoContent = json.dumps({"type": "multicast", "message": message, "recipients":user})#Test
-    # print (demoContent) #test
     return json.dumps({"type": "multicast", "message": message, "recipients":user}).encode()
 
 def broadcast(message):
@@ -29,18 +22,15 @@ def message_receving(client_socket):
     global connected
     try:
         while connected:
-            
             data = client_socket.recv(1024).decode()
-            
             if not data:
                 print("Server closed the connection.")
                 break
-            
             message_data = json.loads(data)
             message_type = message_data["type"]
             message = message_data["message"]
-            
             print(f"<{message_type}> {message}")
+            
     except ConnectionResetError:
         print("Connection reset by server.")
     except Exception as e:
@@ -74,14 +64,9 @@ def message_sending(client_socket):
     global connected
     try:
         while connected:
-            # [user1] message...
-            # [user1 user2 user3] message...
-            # message...
-            
             message_input = input("")
             
             if message_input == "EXIT":
-                # Notify the server that the client is disconnecting
                 client_socket.send(json.dumps({"type": "disconnect"}).encode())
                 time.sleep(1)
                 connected = False
@@ -95,23 +80,16 @@ def message_sending(client_socket):
                         print(f"File {file_path} does not exist.")    
                 elif message_input.startswith('['):
                     temp = message_input.split(']')
-                    
                     userStr = temp[0]
                     messageString = temp[1]
-                    
                     users = userStr.strip('[').split(' ')
-                    
-                    #print (users , len(users) , type(users)) #test
-                    
                     if len(users) == 1:
-                        #print ("enterd unicast") #test
                         client_socket.send(unicast(messageString, users[0]))
                     elif len(users) > 1:
-                        #print ("enterd multicast") #test
                         client_socket.send(multicast(messageString, users))
                 else:
-                    #print ("enterd broadcast") #test
                     client_socket.send(broadcast(message_input))
+                    
             except Exception as e:
                 print(f"Invalid message format. Try agian")
     except Exception as e:
