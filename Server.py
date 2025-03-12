@@ -58,12 +58,12 @@ def log_message(message_type, sender, message, recipients=None):
 def send_broadcast(message, sender):
     log_message("broadcast", sender, message)
     for client in clients.values():
-        if client != sender:
             client.send(json.dumps({"type": "broadcast", "message": message}).encode())
 
 # إرسال رسالة لمجموعة معينة (Multicast)
 def send_multicast(message, sender, recipients):
     log_message("multicast", sender, message, recipients)
+    sender.send(json.dumps({"type": "multicast", "message": message}).encode())
     for user in recipients:
         if user in clients and clients[user] != sender:
             clients[user].send(json.dumps({"type": "multicast", "message": message}).encode())
@@ -71,6 +71,7 @@ def send_multicast(message, sender, recipients):
 # إرسال رسالة لمستخدم معين (Unicast)
 def send_unicast(message, sender, recipient):
     log_message("unicast", sender, message, recipient)
+    sender.send(json.dumps({"type": "unicast", "message": message}).encode())
     if recipient in clients:
         clients[recipient].send(json.dumps({"type": "unicast", "message": message}).encode())
 
