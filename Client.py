@@ -6,21 +6,22 @@ import os
 
 HOST = '127.0.0.1'
 PORT = 12345
-
 connected = True
-
 SECRET_KEY = "mysecretkey"
 
 def xor_encrypt_decrypt(data, key=SECRET_KEY):
     return "".join(chr(ord(c) ^ ord(key[i % len(key)])) for i, c in enumerate(data))
 
 def unicast(message, user):
+    encrypted_message = xor_encrypt_decrypt(message)
     return json.dumps({"type": "unicast", "message": message, "recipient":user}).encode()
 
 def multicast(message, user):
+    encrypted_message = xor_encrypt_decrypt(message)
     return json.dumps({"type": "multicast", "message": message, "recipients":user}).encode()
 
 def broadcast(message):
+    encrypted_message = xor_encrypt_decrypt(message)
     return json.dumps({"type": "broadcast", "message": message}).encode()
 
 def message_receving(client_socket):
@@ -33,8 +34,9 @@ def message_receving(client_socket):
                 break
             message_data = json.loads(data)
             message_type = message_data["type"]
+            decrypted_message = xor_encrypt_decrypt(message_data["message"])
             message = message_data["message"]
-            print(f"<{message_type}> {message}")
+            print(f"<{message_type}> {decrypted_message}")
             
     except ConnectionResetError:
         print("Connection reset by server.")
