@@ -1,6 +1,6 @@
-# XOR Encrypted Chat Application
+# Messaging Application
 
-A multi-client real-time chat application built in Python. Supports private, group, and broadcast messaging with XOR-encrypted communication over TCP.
+A multi-client real-time chat application built in Python. Supports private, group, and broadcast messaging with encrypted communication over TCP.
 
 ---
 
@@ -11,7 +11,7 @@ A multi-client real-time chat application built in Python. Supports private, gro
 - User registration and login with persistent storage
 - File transfer over the encrypted connection
 - Server-side chat logs per conversation
-- Desktop GUI with dark mode (CustomTkinter)
+- GUI (CustomTkinter)
 
 ---
 
@@ -67,11 +67,3 @@ IS370-project/
 ├── users.json      # Registered users (auto-created on first login)
 └── chat_logs/      # Per-conversation log files (auto-created)
 ```
-
----
-
-## Encryption
-
-All data is encrypted using an XOR cipher before being sent over the socket. Binary files are hex-encoded prior to encryption so they can be safely transmitted through the text-based protocol. The same key is used for both encryption and decryption since XOR is a symmetric operation.
-
-> **Note:** XOR encryption is used here for learning purposes. It is not suitable for production use.
