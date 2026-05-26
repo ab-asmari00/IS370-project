@@ -6,175 +6,200 @@ import os
 
 HOST = '127.0.0.1'
 PORT = 12345
-
-clients = {}
-
+SECRET_KEY = "mysecretkey"
 USER_FILE = "users.json"
 CHAT_LOG_DIR = "chat_logs"
 
-# إنشاء مجلد لحفظ سجلات المحادثات إذا لم يكن موجودًا
-if not os.path.exists(CHAT_LOG_DIR):
-    os.makedirs(CHAT_LOG_DIR)
+clients = {}
 
-# تحميل الحسابات عند بدء التشغيل حتى لا تفقد بعد إعادة التشغيل
+os.makedirs(CHAT_LOG_DIR, exist_ok=True)
+
 if os.path.exists(USER_FILE):
-    with open(USER_FILE, "r") as file:
-        users = json.load(file)
+    with open(USER_FILE) as f:
+        users = json.load(f)
 else:
     users = {}
 
-# دالة لحفظ المستخدمين في ملف JSON بعد إنشائهم
+
+def xor_cipher(data):
+    if isinstance(data, bytes):
+        data = data.decode('utf-8', errors='replace')
+    return "".join(chr(ord(c) ^ ord(SECRET_KEY[i % len(SECRET_KEY)])) for i, c in enumerate(data))
+
+
+def send_encrypted(sock, data):
+    if isinstance(data, dict):
+        data = json.dumps(data)
+    sock.send(xor_cipher(data).encode('utf-8'))
+
+
+def decrypt(raw):
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8', errors='replace')
+    return xor_cipher(raw)
+
+
 def save_users():
-    with open(USER_FILE, "w") as file:
-        json.dump(users, file)
+    with open(USER_FILE, "w") as f:
+        json.dump(users, f)
 
-# تحديد ملف السجل المناسب بناءً على نوع المحادثة
-# - broadcast: ملف مشترك لجميع الرسائل العامة
-# - multicast: ملف خاص لكل مجموعة
-# - unicast: ملف منفصل لكل محادثة خاصة بين مستخدمين
 
-def get_chat_log_filename(message_type, sender, recipients=None):
-    if message_type == "broadcast":
-        return os.path.join(CHAT_LOG_DIR, "broadcast_chat.txt")
-    elif message_type == "multicast" and recipients:
-        group_name = "_".join(sorted(recipients))
-        return os.path.join(CHAT_LOG_DIR, f"group_chat_{group_name}.txt")
-    elif message_type == "unicast" and recipients:
-        #user_pair = "_".join(sorted([sender, recipients])) فيها بلاء
-        user_pair = "_".join(sorted(recipients))
-        return os.path.join(CHAT_LOG_DIR, f"private_chat_{user_pair}.txt")
+def get_log_path(msg_type, recipients=None):
+    if msg_type == "broadcast":
+        return os.path.join(CHAT_LOG_DIR, "broadcast.txt")
+    if not recipients:
+        return None
+    name = "_".join(sorted(recipients))
+    if msg_type == "multicast":
+        return os.path.join(CHAT_LOG_DIR, f"group_{name}.txt")
+    if msg_type == "unicast":
+        return os.path.join(CHAT_LOG_DIR, f"private_{name}.txt")
     return None
 
-# حفظ كل رسالة في الملف المناسب بناءً على نوع المحادثة
-def log_message(message_type, sender, message, recipients=None):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[{timestamp}] {sender}: {message}\n"
-    log_filename = get_chat_log_filename(message_type, sender, recipients)
-    if log_filename:
-        with open(log_filename, "a", encoding="utf-8") as file:
-            file.write(log_entry)
 
-# إرسال رسالة لجميع المستخدمين (Broadcast)
+def log_message(msg_type, sender, message, recipients=None):
+    path = get_log_path(msg_type, recipients)
+    if not path:
+        return
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {sender}: {message}\n")
+
+
 def send_broadcast(message, sender):
     log_message("broadcast", sender, message)
-    for client in clients.values():
-            client.send(json.dumps({"type": "broadcast", "message": message}).encode())
+    for sock in clients.values():
+        send_encrypted(sock, {"type": "broadcast", "message": message})
 
-# إرسال رسالة لمجموعة معينة (Multicast)
+
 def send_multicast(message, sender, recipients):
     log_message("multicast", sender, message, recipients)
-    sender.send(json.dumps({"type": "multicast", "message": message}).encode())
+    send_encrypted(clients[sender], {"type": "multicast", "message": message})
     for user in recipients:
-        if user in clients and clients[user] != sender:
-            clients[user].send(json.dumps({"type": "multicast", "message": message}).encode())
+        if user in clients and user != sender:
+            send_encrypted(clients[user], {"type": "multicast", "message": message})
 
-# إرسال رسالة لمستخدم معين (Unicast)
+
 def send_unicast(message, sender, recipient):
-    log_message("unicast", sender, message, recipient)
-    sender.send(json.dumps({"type": "unicast", "message": message}).encode())
+    log_message("unicast", sender, message, [recipient])
+    send_encrypted(clients[sender], {"type": "unicast", "message": message})
     if recipient in clients:
-        clients[recipient].send(json.dumps({"type": "unicast", "message": message}).encode())
+        send_encrypted(clients[recipient], {"type": "unicast", "message": message})
 
-# التعامل مع كل مستخدم متصل بالخادم
-def handle_client(client_socket, username):
+
+def receive_file(sock, file_name):
+    raw = sock.recv(1024)
+    file_size = json.loads(decrypt(raw))["size"]
+    print(f"Receiving '{file_name}' ({file_size} bytes)")
+
+    remaining = file_size
+    with open(file_name, "wb") as f:
+        while remaining > 0:
+            chunk = sock.recv(1024)
+            if not chunk:
+                break
+            # file data is hex-encoded before encryption to safely transfer binary over text protocol
+            binary = bytes.fromhex(decrypt(chunk))
+            f.write(binary)
+            remaining -= len(binary)
+
+    print(f"Saved '{file_name}'")
+
+
+def handle_client(sock, username):
     try:
         while True:
-            #print("Entered handle_client method before date") # Testing!
-            data = client_socket.recv(1024).decode()
-            #print("Entered handle_client method before break: ", type(data)) # Testing!
-            if not data:
+            raw = sock.recv(1024)
+            if not raw:
                 break
-            
-            #print("Entered handle_client method after break") # Testing!
-            
-            message_data = json.loads(data)
-            message_type = message_data["type"]
-            
-            if message_type == "disconnect":
-                print(f"{username} has disconnected.")
-                break
-            
-            elif message_type == "file":
-                # Receive file name
-                file_name = message_data["file_name"]
-                print(f"Receiving file: {file_name}")
 
-                # Receive file size
-                file_size_data = client_socket.recv(1024).decode()
-                file_size = json.loads(file_size_data)["size"]
-                print(f"File size: {file_size} bytes")
+            try:
+                data = json.loads(decrypt(raw))
+                msg_type = data["type"]
+                message = f"{username}: {data.get('message', '')}"
 
-                # Receive file data in chunks
-                received_size = 0
-                with open(file_name, "wb") as file:
-                    while received_size < file_size:
-                        data = client_socket.recv(1024)
-                        if not data:
-                            break
-                        file.write(data)
-                        received_size += len(data)
-                print(f"File {file_name} received successfully.")
-                
-            else:
-                message = message_data["message"]
-                
-                if message_type == "broadcast":
-                    #print(f"{username}: {message}") # Testing!
-                    send_broadcast(f"{username}: {message}", client_socket)
-                elif message_type == "multicast":
-                    send_multicast(f"{username}: {message}", client_socket, message_data["recipients"])
-                elif message_type == "unicast":
-                    #print(f"{username}: {message}","QQQQQ", message_data["recipient"]) # Testing!
-                    send_unicast(f"{username}: {message}", client_socket, message_data["recipient"])
-    
+                if msg_type == "disconnect":
+                    break
+                elif msg_type == "file":
+                    receive_file(sock, data["file_name"])
+                elif msg_type == "broadcast":
+                    send_broadcast(message, username)
+                elif msg_type == "multicast":
+                    send_multicast(message, username, data["recipients"])
+                elif msg_type == "unicast":
+                    send_unicast(message, username, data["recipient"])
+
+            except json.JSONDecodeError:
+                print(f"Bad JSON from {username}")
+            except Exception as e:
+                print(f"Error handling message from {username}: {e}")
+
     except Exception as e:
-        print(f" Error with {username}: {e}")
-    
+        print(f"Connection error with {username}: {e}")
     finally:
-        client_socket.close()
-        del clients[username]
-        print(f" {username} disconnected")
+        sock.close()
+        clients.pop(username, None)
+        print(f"{username} disconnected")
 
-# تشغيل الخادم واستقبال المستخدمين الجدد والتعامل مع تسجيل الدخول
+
+def handle_login(sock, addr):
+    username = None
+    try:
+        while True:
+            send_encrypted(sock, "Enter your username: ")
+            raw = sock.recv(1024)
+            if not raw:
+                return
+            username = decrypt(raw).strip()
+
+            send_encrypted(sock, "Enter your password: ")
+            raw = sock.recv(1024)
+            if not raw:
+                return
+            password = decrypt(raw).strip()
+
+            if username in users:
+                if users[username] != password:
+                    send_encrypted(sock, "Incorrect password. Try again.")
+                elif username in clients:
+                    send_encrypted(sock, "Username already logged in. Try again.")
+                else:
+                    send_encrypted(sock, "Login successful!")
+                    break
+            else:
+                users[username] = password
+                save_users()
+                send_encrypted(sock, "New account created successfully!")
+                break
+
+        clients[username] = sock
+        send_encrypted(sock, "Welcome to the chat server!")
+        print(f"{username} joined the chat")
+        handle_client(sock, username)
+
+    except Exception as e:
+        print(f"Login error from {addr}: {e}")
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if username in clients:
+            del clients[username]
+
+
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
     server.listen(5)
     print(f"Server started on {HOST}:{PORT}")
-    
-    while True:
-        client_socket, addr = server.accept()
-        print(f"Connection from {addr}")
-        
-        while True:
-            client_socket.send("Enter your username: ".encode())
-            username = client_socket.recv(1024).decode().strip()
-            
-            client_socket.send("Enter your password: ".encode())
-            password = client_socket.recv(1024).decode().strip()
-    
-            if username in users:
-                if users[username] != password:
-                    client_socket.send(" Incorrect password. Try again.".encode())
-                    #client_socket.close()
-                elif username in clients:
-                    client_socket.send("Username already logged in. Try again.".encode())
-                    #client_socket.close()
-                else:
-                    client_socket.send(" Login successful!".encode())
-                    break
-            else:
-                users[username] = password
-                save_users()
-                client_socket.send(" New account created successfully!".encode())
-                break
-        
-        clients[username] = client_socket
-        client_socket.send("Welcome to the chat server!".encode())
-        print(f"{username} joined the chat")
 
-        thread = threading.Thread(target=handle_client, args=(client_socket, username))
+    while True:
+        sock, addr = server.accept()
+        print(f"Connection from {addr}")
+        thread = threading.Thread(target=handle_login, args=(sock, addr))
+        thread.daemon = True
         thread.start()
+
 
 if __name__ == "__main__":
     start_server()
