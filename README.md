@@ -1,6 +1,19 @@
 # Messaging Application
 
-A multi-client real-time chat application built in Python. Supports private, group, and broadcast messaging with encrypted communication over TCP.
+A multi-client Instant Messaging (IM) application application built in Python. Supports private, group, and broadcast messaging with encrypted communication over TCP.
+
+---
+
+## Course Project
+
+This project was developed as part of the **Data Transmission and Computer Networks** course.
+
+### Main Topics Covered
+- Socket Programming
+- Message Transmission
+- Concurrency / Multithreading
+- Client–Server Communication
+- TCP Networking
 
 ---
 
